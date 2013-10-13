@@ -6,13 +6,14 @@
 #define MAXATOM 20000		//maximum of atoms
 #define SILATICE 3.5644f	//periodic of initial latice
 #define KZAR 136873.83f	//e^2/(4*Pi*Eps0)   [g*A^3/ps^2]
-#define MAXATOMTYPE 20		//maximum type of atoms
+#define MAXATOMTYPE 4		//maximum type of atoms
 #define kB	8.314462f	// Boltzman constant [J/K/mol]
 #define SQRTPI 1.7724538509	//sqrt(pi())
 #define POTKOF	10.0	//potential koefficient
 #define DelT 0.001 //integration step time [ps]
 #define QNH	1.0f
-
+#define RDFBIN  0.05f	//rdf calc stepize
+#define MAXRDFBIN  2000
 
 
 //speed in A/ps
@@ -33,7 +34,7 @@ float* fx;
 float* fy;
 float* fz;
 int* AType;
-int rseed = -31890;
+int rseed=-31425;
 char* grofile;
 int* TypeKol;
 float HBox;
@@ -59,11 +60,17 @@ float la_t;
 int TFtemp;
 int TFpress;
 
+float* rdf;
+int rdfcount;
+float* properties;
+
+float* ndens; //number density [A^-3]
+float SystemDens;
 
 void AtomPlace(float* x, float* y,float* z, int* A,int L,int &N);
 void groout(const char* filename,float* x,float* y,float* z,float* vx, float* vy, float* vz ,int* T, int N,float Hbox);
 void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz,float* vx, float* vy, float* vz, float* m, float dt, int N);
-void bmhpotential(float* x,float* y, float* z, float* fx, float* fy, float* fz, float* A, float* b, float* ro, float* q,int* type ,int N,float L);
+void bmhpotential(float* x,float* y, float* z, float* fx, float* fy, float* fz, float* A, float* b, float* ro, float* q,int* type ,int N,float L,float* properties);
 float rast (float x1,float x2,float L);
 void GenVel(float* vx, float* vy, float* vz, float* m,float temp, int N);
 void SetAtom(float* m, int* Atype, float* mset,int N);
@@ -73,7 +80,13 @@ void bmhtest(float* A, float* b, float* ro, float* q,int vv);
 float CurrentTemp(float* vx, float* vy ,float* vz,float* m, int N);
 void integrateNH(float* x, float* y,float* z,float* fx, float* fy, float* fz,
 	float* vx, float* vy, float* vz, float* m, float dt, int N,float CurT, float RefT, float pnh);
-	void TempCouple(float* vx, float* vy, float* vz,float CurTemp,float RefTemp, int N);
+void TempCouple(float* vx, float* vy, float* vz,float CurTemp,float RefTemp, int N);
+void PressCouple(float* x, float* y,float* z,float CurP,float RefP,int N);
+void CalcRDF(float* x, float* y, float* z,int* type,float* rdf, int rdfcount, int N,float L);
+void rdfOut(float* rdf, int rdfcount,int vv,float L);
+float CurrentPress(float W, float T, float ro, int N);
+void ResetAtoms(int* type, int N,int toset);
+
 
 int main(int argc, char* argv[]){
 	if (argc<1){
@@ -85,13 +98,15 @@ int main(int argc, char* argv[]){
 	}
 	FILE* InitFile=fopen(argv[1],"r");
 		fscanf(InitFile,"%d",&Latice);
-		fscanf(InitFile,"%f/t%d",&temp,&TFtemp);
-		fscanf(InitFile,"%f/t%d",&pressure,&TFpress);
+		fscanf(InitFile,"%f   %d",&temp,&TFtemp);
+		fscanf(InitFile,"%f   %d",&pressure,&TFpress);
 		fscanf(InitFile,"%d",&PerType);
 	fclose(InitFile);
+	printf("Temperature coupling %d Reference temperature: %f \n", TFtemp, temp);
+	printf("Pressure coupling %d Reference temperature: %f \n", TFpress, pressure);
+	system("sleep 1");
 	// rand initial
 	rseed=rand()%32000+1;
-	pnh=0.0001;
 	printf("Random rseed %d \n",rseed);
 	Natom=MAXATOM;
 	printf("%d\n",Natom);
@@ -106,12 +121,14 @@ int main(int argc, char* argv[]){
 	fz=(float*)calloc(Natom,sizeof(float));
 	AType=(int*)calloc(Natom,sizeof(int));	
 	mass=(float*)calloc(Natom,sizeof(float));
+	ndens=(float*)calloc(MAXATOMTYPE,sizeof(float));
 	printf("allocate done\n");
 	//
 	TypeKol=(int*)calloc(MAXATOMTYPE,sizeof(int));
 	InitMass=(float*)calloc(MAXATOMTYPE,sizeof(float));
 	InitMass[1]=28.085f;	//[g/mol]
 	InitMass[2]=15.999f;
+	InitMass[3]=14.0f;
 	A_p=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	b_p=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	ro_p=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
@@ -121,6 +138,13 @@ int main(int argc, char* argv[]){
 	ga_sw=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	rc_sw=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	cos_sw=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	
+	rdf=(float*)calloc(MAXRDFBIN*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	printf( "rdf diension %d \n",MAXRDFBIN*MAXATOMTYPE*MAXATOMTYPE);
+	properties=(float*)calloc(20,sizeof(float));
+	system("sleep 1");
+	
+	
 	//parameters Si-Si
 	int atom1=1;
 	int atom2=1;
@@ -151,10 +175,40 @@ int main(int argc, char* argv[]){
 	ro_p[atom1*MAXATOMTYPE+atom2]=0.29f;	//[A]
 	ro_p[atom2*MAXATOMTYPE+atom1]=0.29f;
 	
+	//paraemters Si-C
+	atom1=1;
+	atom2=3;
+	A_p[atom1*MAXATOMTYPE+atom2]=7940000.0f;	//
+	A_p[atom2*MAXATOMTYPE+atom1]=7940000.0f;
+	b_p[atom1*MAXATOMTYPE+atom2]=3.5f;	//[A]
+	b_p[atom2*MAXATOMTYPE+atom1]=3.5f;
+	ro_p[atom1*MAXATOMTYPE+atom2]=1.899f;	//[A]
+	ro_p[atom2*MAXATOMTYPE+atom1]=1.899f;
 	
+	//paraemters C-C
+	atom1=3;
+	atom2=3;
+	A_p[atom1*MAXATOMTYPE+atom2]=7940000.0f;	//
+	A_p[atom2*MAXATOMTYPE+atom1]=7940000.0f;
+	b_p[atom1*MAXATOMTYPE+atom2]=3.0f;	//[A]
+	b_p[atom2*MAXATOMTYPE+atom1]=3.0f;
+	ro_p[atom1*MAXATOMTYPE+atom2]=1.54f;	//[A]
+	ro_p[atom2*MAXATOMTYPE+atom1]=1.54f;
+	//charges
+	
+	//paraemters C-O
+	atom1=2;
+	atom2=3;
+	A_p[atom1*MAXATOMTYPE+atom2]=7940000.0f;	//
+	A_p[atom2*MAXATOMTYPE+atom1]=7940000.0f;
+	b_p[atom1*MAXATOMTYPE+atom2]=3.0f;	//[A]
+	b_p[atom2*MAXATOMTYPE+atom1]=3.0f;
+	ro_p[atom1*MAXATOMTYPE+atom2]=0.29f;	//[A]
+	ro_p[atom2*MAXATOMTYPE+atom1]=0.29f;
 	//charges
 	q_p[1]=4.0f;
 	q_p[2]=-2.0f;
+	q_p[3]=0.0f;
 	
 	atom1=1;	//fo Si
 		atom2=2;
@@ -184,37 +238,141 @@ int main(int argc, char* argv[]){
 	rc_sw[tempi]=2.6f;
 	cos_sw[tempi]=-1.0f;
 	
+	atom1=3;	//fo C-Si
+		atom2=1;
+		atom3=1;
+	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
+	la_sw[tempi]=18006600.0f;
+	ga_sw[tempi]=2.0f;
+	rc_sw[tempi]=4.50f;
+	cos_sw[tempi]=-0.38540f;
+	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
+	la_sw[tempi]=18006600.0f;
+	ga_sw[tempi]=2.0f;
+	rc_sw[tempi]=4.5f;
+	cos_sw[tempi]=-0.3854f;
+	
+	atom1=1;	//fo Si-C
+		atom2=1;
+		atom3=3;
+	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
+	la_sw[tempi]=1806600.0f;
+	ga_sw[tempi]=2.0f;
+	rc_sw[tempi]=4.5f;
+	cos_sw[tempi]=-0.3938f;
+	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
+	la_sw[tempi]=18006600.0f;
+	ga_sw[tempi]=2.0f;
+	rc_sw[tempi]=4.5f;
+	cos_sw[tempi]=-0.3938f;
+	
+	atom1=3;	//fo С-C
+		atom2=3;
+		atom3=3;
+	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
+	la_sw[tempi]=180006600.0f;
+	ga_sw[tempi]=2.0f;
+	rc_sw[tempi]=4.5f;
+	cos_sw[tempi]=1.0f;
+	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
+	la_sw[tempi]=180660000.0f;
+	ga_sw[tempi]=2.0f;
+	rc_sw[tempi]=4.5f;
+	cos_sw[tempi]=1.0f;
 	
 	AtomPlace(ax,ay,az,AType,Latice,Natom);
 	HBox=Latice*SILATICE;
+	SystemDens=0.0f;
+	for(int i=1;i<MAXATOMTYPE;i++){
+		ndens[i]=TypeKol[i]/HBox/HBox/HBox;
+		SystemDens+=ndens[i];
+	}
+	printf("Total system density %f \n", SystemDens);
 	//HBox=HBox*2.0;
 	SetAtom(mass,AType,InitMass,Natom);
 	GenVel(vx, vy, vz,mass,temp,Natom);
-	bmhtest(A_p,b_p,ro_p,q_p,2);
+	bmhtest(A_p,b_p,ro_p,q_p,3);
 	SysTime=0.0;
-		//start integration
-		for(int step=1; step<1000;step++){
+	rdfcount=0;
+		//start initial 4000 K temperature XXX ps
+		temp=4000.0f;
+		TFpress=0;
+		for(int step=1; step<300;step++){
 			SysTime+=DelT;
 			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
-			SysPress=1.0;
+			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
 			if(TFtemp==1){
 				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
 			}
 			if(TFpress==1){
 				PressCouple(ax,ay,az,SysPress,pressure,Natom);
 			}
-			printf("Temprerature %f \n", SysTemp);
-			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox);
+			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
+			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox,properties);
 			swpotential(ax,ay,az,fx,fy,fz,la_sw,ga_sw,rc_sw, cos_sw,AType,Natom,HBox);
 			printf("step # %d \n", step);
 			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
 			//integrateNH(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom,SysTemp,temp,pnh);
 			check(ax,ay,az,HBox,Natom);
+			//CalcRDF(ax, ay, az,AType,rdf,rdfcount,Natom,HBox);
+			//rdfcount+=1;
 			//void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz, float* vx, float* vy, float* vz, float* m, float dt, int N){
-		
+		groout("step1.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
 		}
+		ResetAtoms(AType,Natom,floor(TypeKol[2]*0.1));
+		SetAtom(mass,AType,InitMass,Natom);
+		// PVT at 298 K  XXX ps
+		temp=298.0f;
+		//TFpress=1;
+		pressure=10000;
+		for(int step=1; step<300;step++){
+			SysTime+=DelT;
+			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
+			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
+			if(TFtemp==1){
+				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
+			}
+			if(TFpress==1){
+				PressCouple(ax,ay,az,SysPress,pressure,Natom);
+			}
+			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
+			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox,properties);
+			swpotential(ax,ay,az,fx,fy,fz,la_sw,ga_sw,rc_sw, cos_sw,AType,Natom,HBox);
+			printf("step # %d \n", step);
+			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
+			//integrateNH(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom,SysTemp,temp,pnh);
+			check(ax,ay,az,HBox,Natom);
+			//CalcRDF(ax, ay, az,AType,rdf,rdfcount,Natom,HBox);
+			//rdfcount+=1;
+			//void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz, float* vx, float* vy, float* vz, float* m, float dt, int N){
+		}
+		groout("step2.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+		// averagin at 298 K  XXX ps
+		temp=298.0f;
+		for(int step=1; step<300;step++){
+			SysTime+=DelT;
+			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
+			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
+			if(TFtemp==1){
+				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
+			}
+			if(TFpress==1){
+				PressCouple(ax,ay,az,SysPress,pressure,Natom);
+			}
+			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
+			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox,properties);
+			swpotential(ax,ay,az,fx,fy,fz,la_sw,ga_sw,rc_sw, cos_sw,AType,Natom,HBox);
+			printf("step # %d \n", step);
+			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
+			//integrateNH(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom,SysTemp,temp,pnh);
+			check(ax,ay,az,HBox,Natom);
+			CalcRDF(ax, ay, az,AType,rdf,rdfcount,Natom,HBox);
+			rdfcount+=1;
+			//void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz, float* vx, float* vy, float* vz, float* m, float dt, int N){
+		}
+		//groout("file.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
 	printf("  %d \n", Natom);
-	
+	rdfOut(rdf,rdfcount,2,HBox);
 	groout("file.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
 	free(ax);
 	free(ay);
@@ -318,7 +476,7 @@ void AtomPlace(float* x, float* y, float* z, int* T, int L,int &N){
 		TypeKol[AType[i]]++;
 	}
 	for(int i=1;i<4;i++){
-	printf("Particles type %d %d  \n", i, TypeKol[i]);
+		printf("Particles type %d %d  \n", i, TypeKol[i]);
 	}
 }
 
@@ -377,17 +535,17 @@ void integrateNH(float* x, float* y,float* z,float* fx, float* fy, float* fz,
 	}
 }
 
-void bmhpotential(float* x,float* y, float* z, float* fx, float* fy, float* fz, float* A, float* b, float* ro, float* q,int* type ,int N,float L){
+void bmhpotential(float* x,float* y, float* z, float* fx, float* fy, float* fz, float* A, float* b, float* ro, float* q,int* type ,int N,float L, float* properties){
 	float tx;
 	float ty;
 	float tz;
 	float rz;
 	int lin;
 	float fbmh;
-	//printf("ololo");
-	//printf("N %d \n",N);
 	int i;
 	int j;
+	//float Wtemp;
+	properties[1]=0.0f;
 	for(i=0;i<N;i++){
 		for(j=0;j<N;j++){
 			if(i!=j){
@@ -400,20 +558,38 @@ void bmhpotential(float* x,float* y, float* z, float* fx, float* fy, float* fz, 
 					if(rz<ro[lin]){
 						rz=ro[lin];
 					}
+					fbmh=0.0;
 					//printf("i %d j %d type i %d type j %d , lin %d\n", i,j,type[i],type[j],lin);
-					fbmh= -A[lin]/ro[lin]*exp(-rz/ro[lin])-KZAR*q[type[i]]*q[type[j]]/rz/rz*erfc(rz/b[lin])-2.0f*KZAR*q[type[i]]*q[type[j]]/SQRTPI/b[lin]/rz*exp(-rz*rz/b[lin]/b[lin]);
-					//printf("i %d j %d typei %d typej %d \n", i,j, type[i],type[j]);
-					//printf(" A  %f ro %f b %f  q1  %f  q2  %f\n", A[lin],ro[lin],b[lin],q[type[i]],q[type[j]]);
-					//printf("rz   %f   force %f\n", rz, -fbmh);
-					//system("sleep 1");
+					if(((type[i]==1)&&(type[j]==2))||((type[i]==2)&&(type[j]==1))){
+						fbmh= -A[lin]/ro[lin]*exp(-rz/ro[lin])-KZAR*q[type[i]]*q[type[j]]/rz/rz*erfc(rz/b[lin])-2.0f*KZAR*q[type[i]]*q[type[j]]/SQRTPI/b[lin]/rz*exp(-rz*rz/b[lin]/b[lin]);
+					}
+					if(((type[i]==1)&&(type[j]==3))||((type[i]==3)&&(type[j]==1))){
+						if (rz<b[lin]){
+							fbmh=-2.0*A[lin]/10000.0*(rz-ro[lin]);
+						}
+					}
+					if(((type[i]==3)&&(type[j]==3))||((type[i]==3)&&(type[j]==3))){
+						if (rz<b[lin]){
+							fbmh=-2.0*A[lin]/10000.0*(rz-ro[lin]);
+						}
+					}
+					if(((type[i]==2)&&(type[j]==3))||((type[i]==3)&&(type[j]==2))){
+						fbmh= -A[lin]/ro[lin]*exp(-rz/ro[lin])-KZAR*q[type[i]]*q[type[j]]/rz/rz*erfc(rz/b[lin])-2.0f*KZAR*q[type[i]]*q[type[j]]/SQRTPI/b[lin]/rz*exp(-rz*rz/b[lin]/b[lin]);
+					}
+//					printf("i %d j %d typei %d typej %d \n", i,j, type[i],type[j]);
+//					printf(" A  %f ro %f b %f  q1  %f  q2  %f\n", A[lin],ro[lin],b[lin],q[type[i]],q[type[j]]);
+//					printf("rz   %f   force %f\n", rz, -fbmh);
+//					system("sleep 1");
 					//A[lin]*exp(-rz/ro[lin])+q[i]*q[j]*KZAR*erfc(rz/b[lin]);
 					fx[i]+=fbmh*tx/rz;
 					fy[i]+=fbmh*ty/rz;
 					fz[i]+=fbmh*tz/rz;
+					properties[1]+=fx[i]*tx+fy[i]*ty+fz[i]*tz;
 				}
 			}
 		}
 	}
+	//printf("W = %f ", properties[1]);
 }
 
 void swpotential(float* x,float* y, float* z, float* fx, float* fy, float* fz,float* la, float* ga, float* rc, float* cosphi, int* type, int N, float L){
@@ -612,13 +788,127 @@ float CurrentTemp(float* vx, float* vy ,float* vz,float* m, int N){
 	return sum/N/kB/3.0f*10.0f;	//[K]
 }
 
+float CurrentPress(float W, float T, float ro, int N){
+	//printf("w %f t %f ro %f n %d \n", W,T,ro, N);
+	return ro*T*kB*16.611+W/N*ro/3.0f*166.11;	//
+}
+
 void TempCouple(float* vx, float* vy, float* vz,float CurTemp,float RefTemp, int N){
 	int i;
 	float la;
-	la=sqrt(1.0f+1.5f*(CurTemp/RefTemp-1.0f));
+	la=sqrt(1.0f+0.9f*(CurTemp/RefTemp-1.0f));
+	//printf("la = %f \n", la);
 	for(i=1;i<N;i++){
 			vx[i]=vx[i]/la;
 			vy[i]=vy[i]/la;
 			vz[i]=vz[i]/la;
 		}		
+}
+
+void PressCouple(float* x,float* y, float* z, float CurP,float RefP, int N){
+	float mu;
+	int i;
+	mu=1.0f+5.0f/300000000000.0f*(CurP-RefP);
+	if(mu>1.1f){
+		mu=1.1f;
+	}
+	if(mu<0.9f){
+		mu=0.9f;
+	}
+	printf("mu %f current pressure %f  reference pressure % f\n", mu, CurP, RefP);
+	for(i=0;i<N;i++){
+		x[i]*=mu;
+		y[i]*=mu;
+		z[i]*=mu;
+	}
+	HBox=HBox*mu;
+}
+
+void CalcRDF(float* x, float* y, float* z,int* type,float* rdf, int rdfcount, int N,float L){
+	int i;
+	int j;
+	int lin;
+	float tx;
+	float ty;
+	float tz;
+	float rz;
+	int hist;
+	for(i=0;i<N;i++){
+		//printf("i = %d  ", i);
+		for(j=i+1;j<N;j++){
+			//printf(" j = %d  ", j);
+			tx=rast(x[i],x[j],L);	//minimal obraz
+			ty=rast(y[i],y[j],L);
+			tz=rast(z[i],z[j],L);
+			rz=sqrt(tx*tx+ty*ty+tz*tz);
+			//printf("rz %f  ", rz );
+			if(rz<L){
+				hist=floor(rz/RDFBIN);
+				//printf("hist %d", hist);
+				lin=MAXATOMTYPE*MAXRDFBIN*type[i]+MAXRDFBIN*type[j]+hist;
+				//printf("hist %d  lin  %d type[i] %d type[j] %d rdf %f \n", hist, lin,type[i],type[j], rdf[lin]);
+				rdf[lin]+=2.0f;
+			}
+			
+		}
+	}
+	//system("sleep 2");
+}
+
+void rdfOut(float* rdf, int rdfcount,int vv,float L){
+	int i;
+	int j;
+	int k;
+	int lin;
+	FILE* fileout=fopen("rdf.out","w");
+	//fprintf(fileout,"");
+	fprintf(fileout," r [A], ");
+	for(i=1;i<vv+1;i++){
+		for(j=1;j<vv+1;j++){
+			fprintf(fileout," %d ", i);
+		}
+	}
+	fprintf(fileout,"  \n");
+	for(k=0;k<MAXRDFBIN;k++){
+		if(k*RDFBIN<L){
+			fprintf(fileout," %f ", k*RDFBIN);
+			for(i=1;i<vv+1;i++){
+				for(j=1;j<vv+1;j++){
+					lin=MAXATOMTYPE*MAXRDFBIN*i+MAXRDFBIN*j+k;
+					fprintf(fileout," %d %f ",lin, rdf[lin]/rdfcount);
+				}
+			}
+		fprintf(fileout," \n");
+		}
+	}
+	fclose(fileout);
+	//printf("rdfcount %d \n", rdfcount);
+}
+
+void ResetAtoms(int* type, int N,int toset){
+	int RandAtom;
+	int tempn;
+	int set;
+	int i;
+	float frand;
+	tempn=N;
+	set=0;
+	printf("reset start N %d set %d toset %d\n", N, set, toset);
+	while(set<toset){
+		frand=ran2(&rseed);
+		
+		RandAtom=floor(frand*N);
+		printf("RandAtom %d %f \n", RandAtom,frand);
+		if(type[RandAtom]==2){
+			type[RandAtom]=3;	//chenge O to C
+			type[tempn]=3;	//add new C
+			ax[tempn]=ax[RandAtom];	//set initial coordinates
+			ay[tempn]=ay[RandAtom];
+			az[tempn]=az[RandAtom]+0.8;
+			printf("ResetAtom %d, tempn %d, set %d \n", RandAtom, tempn, set);
+			tempn+=1;
+			set+=1;
+		}
+	}
+	Natom=tempn;
 }
