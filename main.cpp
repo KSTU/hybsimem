@@ -14,6 +14,8 @@
 #define QNH	1.0f
 #define RDFBIN  0.05f	//rdf calc stepize
 #define MAXRDFBIN  2000
+#define MAXNEAR  30
+#define PI 3.14159265359f
 
 
 //speed in A/ps
@@ -67,6 +69,32 @@ float* properties;
 float* ndens; //number density [A^-3]
 float SystemDens;
 
+int* bond;
+int* angle1;
+int* angle2;
+int* tors1;
+int* tors2;
+int* tors3;
+
+float* PBond1;	//bonds parameters
+float* PBond2;
+float* PBond3;
+float* PBond4;
+
+float* PAngle1;	//angle parameters
+float* PAngle2;
+float* PAngle3;
+float* PAngle4;
+float* fi0;
+
+float* VDWA;
+float* VDWB;
+float* CuQ;
+
+float percent;
+
+
+
 void AtomPlace(float* x, float* y,float* z, int* A,int L,int &N);
 void groout(const char* filename,float* x,float* y,float* z,float* vx, float* vy, float* vz ,int* T, int N,float Hbox);
 void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz,float* vx, float* vy, float* vz, float* m, float dt, int N);
@@ -86,7 +114,14 @@ void CalcRDF(float* x, float* y, float* z,int* type,float* rdf, int rdfcount, in
 void rdfOut(float* rdf, int rdfcount,int vv,float L);
 float CurrentPress(float W, float T, float ro, int N);
 void ResetAtoms(int* type, int N,int toset);
-
+void GetBonds(int N,float L,float br);
+void GetAngles(int N);
+void GetDih(int N);
+void MixingParameters();
+void PotAngle(int N, int L);
+void SummForce(int N, float L);
+void itpout(int N,const char* filename);
+void Replace(int N, float proc);
 
 int main(int argc, char* argv[]){
 	if (argc<1){
@@ -101,6 +136,7 @@ int main(int argc, char* argv[]){
 		fscanf(InitFile,"%f   %d",&temp,&TFtemp);
 		fscanf(InitFile,"%f   %d",&pressure,&TFpress);
 		fscanf(InitFile,"%d",&PerType);
+		fscanf(InitFile,"%f",&percent);
 	fclose(InitFile);
 	printf("Temperature coupling %d Reference temperature: %f \n", TFtemp, temp);
 	printf("Pressure coupling %d Reference temperature: %f \n", TFpress, pressure);
@@ -122,6 +158,13 @@ int main(int argc, char* argv[]){
 	AType=(int*)calloc(Natom,sizeof(int));	
 	mass=(float*)calloc(Natom,sizeof(float));
 	ndens=(float*)calloc(MAXATOMTYPE,sizeof(float));
+	bond=(int*)calloc(MAXATOM*MAXNEAR+MAXATOM,sizeof(int));
+	angle1=(int*)calloc(MAXATOM*MAXNEAR+MAXATOM,sizeof(int));
+	angle2=(int*)calloc(MAXATOM*MAXNEAR+MAXATOM,sizeof(int));
+	tors1=(int*)calloc(MAXATOM*MAXNEAR*MAXNEAR+MAXATOM,sizeof(int));
+	tors2=(int*)calloc(MAXATOM*MAXNEAR*MAXNEAR+MAXATOM,sizeof(int));
+	tors3=(int*)calloc(MAXATOM*MAXNEAR*MAXNEAR+MAXATOM,sizeof(int));
+	
 	printf("allocate done\n");
 	//
 	TypeKol=(int*)calloc(MAXATOMTYPE,sizeof(int));
@@ -142,238 +185,105 @@ int main(int argc, char* argv[]){
 	rdf=(float*)calloc(MAXRDFBIN*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	printf( "rdf diension %d \n",MAXRDFBIN*MAXATOMTYPE*MAXATOMTYPE);
 	properties=(float*)calloc(20,sizeof(float));
-	system("sleep 1");
+	//system("sleep 1");
 	
+	//
+	PBond1=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	PBond2=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	PBond3=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	PBond4=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	
-	//parameters Si-Si
-	int atom1=1;
-	int atom2=1;
-	int atom3=1;
-	A_p[atom1*MAXATOMTYPE+atom2]=11321625.0f;	//[A*g/ps^2/mol]
-	A_p[atom2*MAXATOMTYPE+atom1]=11321625.0f;
-	b_p[atom1*MAXATOMTYPE+atom2]=2.34f;	//[A]
-	b_p[atom2*MAXATOMTYPE+atom1]=2.34f;
-	ro_p[atom1*MAXATOMTYPE+atom2]=0.29f;	//[A]
-	ro_p[atom2*MAXATOMTYPE+atom1]=0.29f;
+	PAngle1=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	PAngle2=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	PAngle3=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	PAngle4=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	fi0=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
 	
-	//parameters Si-O
-	atom1=1;
-	atom2=2;
-	A_p[atom1*MAXATOMTYPE+atom2]=18066423.87;	//
-	A_p[atom2*MAXATOMTYPE+atom1]=18066423.87f;
-	b_p[atom1*MAXATOMTYPE+atom2]=2.29f;	//[A]
-	b_p[atom2*MAXATOMTYPE+atom1]=2.29f;
-	ro_p[atom1*MAXATOMTYPE+atom2]=0.29f;	//[A]
-	ro_p[atom2*MAXATOMTYPE+atom1]=0.29f;
-	//paraemters O-O
-	atom1=2;
-	atom2=2;
-	A_p[atom1*MAXATOMTYPE+atom2]=6624355.0f;	//
-	A_p[atom2*MAXATOMTYPE+atom1]=6624355.0f;
-	b_p[atom1*MAXATOMTYPE+atom2]=2.34f;	//[A]
-	b_p[atom2*MAXATOMTYPE+atom1]=2.34f;
-	ro_p[atom1*MAXATOMTYPE+atom2]=0.29f;	//[A]
-	ro_p[atom2*MAXATOMTYPE+atom1]=0.29f;
+	VDWA=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	VDWB=(float*)calloc(MAXATOMTYPE*MAXATOMTYPE,sizeof(float));
+	CuQ=(float*)calloc(MAXATOMTYPE,sizeof(float));
 	
-	//paraemters Si-C
-	atom1=1;
-	atom2=3;
-	A_p[atom1*MAXATOMTYPE+atom2]=7940000.0f;	//
-	A_p[atom2*MAXATOMTYPE+atom1]=7940000.0f;
-	b_p[atom1*MAXATOMTYPE+atom2]=3.5f;	//[A]
-	b_p[atom2*MAXATOMTYPE+atom1]=3.5f;
-	ro_p[atom1*MAXATOMTYPE+atom2]=1.899f;	//[A]
-	ro_p[atom2*MAXATOMTYPE+atom1]=1.899f;
-	
-	//paraemters C-C
-	atom1=3;
-	atom2=3;
-	A_p[atom1*MAXATOMTYPE+atom2]=7940000.0f;	//
-	A_p[atom2*MAXATOMTYPE+atom1]=7940000.0f;
-	b_p[atom1*MAXATOMTYPE+atom2]=3.0f;	//[A]
-	b_p[atom2*MAXATOMTYPE+atom1]=3.0f;
-	ro_p[atom1*MAXATOMTYPE+atom2]=1.54f;	//[A]
-	ro_p[atom2*MAXATOMTYPE+atom1]=1.54f;
-	//charges
-	
-	//paraemters C-O
-	atom1=2;
-	atom2=3;
-	A_p[atom1*MAXATOMTYPE+atom2]=7940000.0f;	//
-	A_p[atom2*MAXATOMTYPE+atom1]=7940000.0f;
-	b_p[atom1*MAXATOMTYPE+atom2]=3.0f;	//[A]
-	b_p[atom2*MAXATOMTYPE+atom1]=3.0f;
-	ro_p[atom1*MAXATOMTYPE+atom2]=0.29f;	//[A]
-	ro_p[atom2*MAXATOMTYPE+atom1]=0.29f;
-	//charges
-	q_p[1]=4.0f;
-	q_p[2]=-2.0f;
-	q_p[3]=0.0f;
-	
-	atom1=1;	//fo Si
-		atom2=2;
-		atom3=2;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
-	la_sw[tempi]=1083985.0f;
-	ga_sw[tempi]=2.6f;
-	rc_sw[tempi]=3.0f;
-	cos_sw[tempi]=-1.0f/3.0f;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
-	la_sw[tempi]=1083985.0f;
-	ga_sw[tempi]=2.6f;
-	rc_sw[tempi]=3.0f;
-	cos_sw[tempi]=-1.0f/3.0f;
-	
-	atom1=2;	//fo O
-		atom2=1;
-		atom3=1;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
-	la_sw[tempi]=18066.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=2.60f;
-	cos_sw[tempi]=-1.0f;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
-	la_sw[tempi]=18066.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=2.6f;
-	cos_sw[tempi]=-1.0f;
-	
-	atom1=3;	//fo C-Si
-		atom2=1;
-		atom3=1;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
-	la_sw[tempi]=18006600.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=4.50f;
-	cos_sw[tempi]=-0.38540f;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
-	la_sw[tempi]=18006600.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=4.5f;
-	cos_sw[tempi]=-0.3854f;
-	
-	atom1=1;	//fo Si-C
-		atom2=1;
-		atom3=3;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
-	la_sw[tempi]=1806600.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=4.5f;
-	cos_sw[tempi]=-0.3938f;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
-	la_sw[tempi]=18006600.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=4.5f;
-	cos_sw[tempi]=-0.3938f;
-	
-	atom1=3;	//fo С-C
-		atom2=3;
-		atom3=3;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom2+atom3;
-	la_sw[tempi]=180006600.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=4.5f;
-	cos_sw[tempi]=1.0f;
-	tempi=MAXATOMTYPE*MAXATOMTYPE*atom1+MAXATOMTYPE*atom3+atom2;
-	la_sw[tempi]=180660000.0f;
-	ga_sw[tempi]=2.0f;
-	rc_sw[tempi]=4.5f;
-	cos_sw[tempi]=1.0f;
-	
+	MixingParameters();
 	AtomPlace(ax,ay,az,AType,Latice,Natom);
 	HBox=Latice*SILATICE;
 	SystemDens=0.0f;
 	for(int i=1;i<MAXATOMTYPE;i++){
 		ndens[i]=TypeKol[i]/HBox/HBox/HBox;
 		SystemDens+=ndens[i];
+		printf(" TypeKol[ %d ] = %d  \n", i, TypeKol[i]);
 	}
 	printf("Total system density %f \n", SystemDens);
+	//abort;
+	//return 1;
 	//HBox=HBox*2.0;
 	SetAtom(mass,AType,InitMass,Natom);
 	GenVel(vx, vy, vz,mass,temp,Natom);
-	bmhtest(A_p,b_p,ro_p,q_p,3);
-	SysTime=0.0;
-	rdfcount=0;
-		//start initial 4000 K temperature XXX ps
-		temp=4000.0f;
-		TFpress=0;
-		for(int step=1; step<300;step++){
-			SysTime+=DelT;
-			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
-			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
-			if(TFtemp==1){
-				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
-			}
-			if(TFpress==1){
-				PressCouple(ax,ay,az,SysPress,pressure,Natom);
-			}
-			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
-			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox,properties);
-			swpotential(ax,ay,az,fx,fy,fz,la_sw,ga_sw,rc_sw, cos_sw,AType,Natom,HBox);
-			printf("step # %d \n", step);
-			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
-			//integrateNH(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom,SysTemp,temp,pnh);
-			check(ax,ay,az,HBox,Natom);
-			//CalcRDF(ax, ay, az,AType,rdf,rdfcount,Natom,HBox);
-			//rdfcount+=1;
-			//void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz, float* vx, float* vy, float* vz, float* m, float dt, int N){
-		groout("step1.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+	GetBonds(Natom,HBox,1.7f);
+	GetAngles(Natom);
+	GetDih(Natom);
+		//
+	//
+	groout("test1.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+	itpout(Natom,"test1.top");
+//	
+//	//bmhtest(A_p,b_p,ro_p,q_p,3);
+//	SysTime=0.0;
+//	rdfcount=0;
+//		//start initial 4000 K temperature XXX ps
+//		temp=298.0f;
+//		TFtemp=1;
+//		TFpress=1;
+//		pressure=100.0f;
+//		for(int step=1; step<1;step++){
+//			SysTime+=DelT;
+//			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
+//			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
+//			if(TFtemp==1){
+//				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
+//			}
+//			if(TFpress==1){
+//				PressCouple(ax,ay,az,SysPress,pressure,Natom);
+//			}
+//			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
+//			SummForce(Natom,HBox);
+//			printf("step # %d \n", step);
+//			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
+//			check(ax,ay,az,HBox,Natom);
+//		//groout("step1.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+//		}
+//	rdfOut(rdf,rdfcount,2,HBox);
+//	groout("file.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+	
+	//
+	Replace(Natom, percent);
+	check(ax,ay,az,HBox,Natom);
+	SetAtom(mass,AType,InitMass,Natom);
+	system("sleep 1");
+//	for(int mi=0;mi<Natom;mi++){
+//		printf("Atom # %d  type %d \n", mi, AType[mi] );
+//		for(int mj=0;mj<bond[mi];mj++){
+//			printf("               %d  type %d \n",bond[mi*MAXNEAR+mj+MAXATOM],AType[bond[mi*MAXNEAR+mj+MAXATOM]]);
+//		}
+//	}
+	printf("Natom %d\n", Natom);
+	system("sleep 2");
+	GetAngles(Natom);
+	GetDih(Natom);
+	groout("test.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+	itpout(Natom,"test.top");
+	
+	for(int tei=0;tei<Natom;tei++){
+		printf("Atom %d Type %d bond %d angle %d tors %d \n",tei,AType[tei],bond[tei],angle1[tei],tors1[tei]);
+		for(int tej=0;tej<bond[tei];tej++){
+			printf("        bn %d , an %d , at %d \n", tej, bond[tei*MAXNEAR+tej+MAXATOM],AType[bond[tei*MAXNEAR+tej+MAXATOM]]);
 		}
-		ResetAtoms(AType,Natom,floor(TypeKol[2]*0.1));
-		SetAtom(mass,AType,InitMass,Natom);
-		// PVT at 298 K  XXX ps
-		temp=298.0f;
-		//TFpress=1;
-		pressure=10000;
-		for(int step=1; step<300;step++){
-			SysTime+=DelT;
-			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
-			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
-			if(TFtemp==1){
-				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
-			}
-			if(TFpress==1){
-				PressCouple(ax,ay,az,SysPress,pressure,Natom);
-			}
-			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
-			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox,properties);
-			swpotential(ax,ay,az,fx,fy,fz,la_sw,ga_sw,rc_sw, cos_sw,AType,Natom,HBox);
-			printf("step # %d \n", step);
-			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
-			//integrateNH(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom,SysTemp,temp,pnh);
-			check(ax,ay,az,HBox,Natom);
-			//CalcRDF(ax, ay, az,AType,rdf,rdfcount,Natom,HBox);
-			//rdfcount+=1;
-			//void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz, float* vx, float* vy, float* vz, float* m, float dt, int N){
+		for(int tek=0;tek<angle1[tei];tek++){
+			printf("        an %d , a1 %d , at1 %d, a2 %d, at2 %d \n", tek, angle1[tei*MAXNEAR+tek+MAXATOM],AType[angle1[tei*MAXNEAR+tek+MAXATOM]],angle2[tei*MAXNEAR+tek+MAXATOM],AType[angle2[tei*MAXNEAR+tek+MAXATOM]]);
 		}
-		groout("step2.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
-		// averagin at 298 K  XXX ps
-		temp=298.0f;
-		for(int step=1; step<300;step++){
-			SysTime+=DelT;
-			SysTemp=CurrentTemp(vx,vy,vz,mass,Natom);
-			SysPress=CurrentPress(properties[1],SysTemp,SystemDens,Natom);
-			if(TFtemp==1){
-				TempCouple(vx, vy, vz, SysTemp,temp, Natom);
-			}
-			if(TFpress==1){
-				PressCouple(ax,ay,az,SysPress,pressure,Natom);
-			}
-			printf("Temprerature %f  pressure %f \n", SysTemp,SysPress);
-			bmhpotential(ax,ay,az,fx,fy,fz,A_p,b_p,ro_p,q_p,AType,Natom,HBox,properties);
-			swpotential(ax,ay,az,fx,fy,fz,la_sw,ga_sw,rc_sw, cos_sw,AType,Natom,HBox);
-			printf("step # %d \n", step);
-			integrate(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom);
-			//integrateNH(ax,ay,az,fx,fy,fz,vx,vy,vz,mass,DelT,Natom,SysTemp,temp,pnh);
-			check(ax,ay,az,HBox,Natom);
-			CalcRDF(ax, ay, az,AType,rdf,rdfcount,Natom,HBox);
-			rdfcount+=1;
-			//void integrate(float* x, float* y,float* z,float* fx, float* fy, float* fz, float* vx, float* vy, float* vz, float* m, float dt, int N){
+		for(int tej=0;tej<tors1[tei];tej++){
+			printf("        tn %d , a1 %d , at1 %d, a2 %d, at2 %d, a3 %d, at3 %d  \n", tej, tors1[tei*MAXNEAR+tej+MAXATOM],AType[tors1[tei*MAXNEAR+tej+MAXATOM]],tors2[tei*MAXNEAR+tej+MAXATOM],AType[tors2[tei*MAXNEAR+tej+MAXATOM]],tors3[tei*MAXNEAR+tej+MAXATOM],AType[tors3[tei*MAXNEAR+tej+MAXATOM]]);
 		}
-		//groout("file.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
-	printf("  %d \n", Natom);
-	rdfOut(rdf,rdfcount,2,HBox);
-	groout("file.gro",ax,ay,az,vx,vy,vz,AType,Natom,HBox);
+	}
 	free(ax);
 	free(ay);
 	free(az);
@@ -399,21 +309,23 @@ void AtomPlace(float* x, float* y, float* z, int* T, int L,int &N){
 			for(int k=0;k<L;k++){
 				//Si insertion
 				if((i+j+k)%2==0){
-				ax[curn]=i*h;
-				ay[curn]=j*h;
-				az[curn]=k*h;
-				AType[curn]=1;
-				//printf("%d %d %d \n", i, j, k);
-				//printf("%d %f %f %f\n", curn, ax[curn],ay[curn],az[curn] );
-				curn++;
+					ax[curn]=i*h;	//в узлах решетки
+					ay[curn]=j*h;
+					az[curn]=k*h;
+					AType[curn]=1;
+					//printf("%d %d %d \n", i, j, k);
+					//printf("%d %f %f %f\n", curn, ax[curn],ay[curn],az[curn] );
+					curn++;
 				//printf("%d \n", curn);
 				}
 				//center Si insertion
-				ax[curn]=(i+0.5f)*h;
-				ay[curn]=(j+0.5f)*h;
-				az[curn]=(k+0.5f)*h;
-				AType[curn]=1;
-				curn++;
+				if((i+j+k)%2==0){
+					ax[curn]=(i+0.5f)*h;	//в центре решетки
+					ay[curn]=(j+0.5f)*h;
+					az[curn]=(k+0.5f)*h;
+					AType[curn]=1;
+					curn++;
+				}
 			}
 		}
 	}
@@ -423,56 +335,56 @@ void AtomPlace(float* x, float* y, float* z, int* T, int L,int &N){
 			for(int k=0;k<L;k++){
 				// O insertion
 				if((i+j+k)%2==0){
-				ax[curn]=(i+0.5f-0.25f)*h;
-				ay[curn]=(j+0.5f-0.25f)*h;
-				az[curn]=(k+0.5f-0.25f)*h;
-				AType[curn]=2;
-				curn++;
-				ax[curn]=(i+0.5f+0.25f)*h;
-				ay[curn]=(j+0.5f+0.25f)*h;
-				az[curn]=(k+0.5f-0.25f)*h;
-				AType[curn]=2;
-				curn++;
-				ax[curn]=(i+0.5f+0.25f)*h;
-				ay[curn]=(j+0.5f-0.25f)*h;
-				az[curn]=(k+0.5f+0.25f)*h;
-				AType[curn]=2;
-				curn++;
-				ax[curn]=(i+0.5f-0.25f)*h;
-				ay[curn]=(j+0.5f+0.25f)*h;
-				az[curn]=(k+0.5f+0.25f)*h;
-				AType[curn]=2;
-				curn++;
+					ax[curn]=(i+0.5f-0.25f)*h;
+					ay[curn]=(j+0.5f-0.25f)*h;
+					az[curn]=(k+0.5f-0.25f)*h;
+					AType[curn]=2;
+					curn++;
+					ax[curn]=(i+0.5f+0.25f)*h;
+					ay[curn]=(j+0.5f+0.25f)*h;
+					az[curn]=(k+0.5f-0.25f)*h;
+					AType[curn]=2;
+					curn++;
+					ax[curn]=(i+0.5f+0.25f)*h;
+					ay[curn]=(j+0.5f-0.25f)*h;
+					az[curn]=(k+0.5f+0.25f)*h;
+					AType[curn]=2;
+					curn++;
+					ax[curn]=(i+0.5f-0.25f)*h;
+					ay[curn]=(j+0.5f+0.25f)*h;
+					az[curn]=(k+0.5f+0.25f)*h;
+					AType[curn]=2;
+					curn++;
 				}
 				else{
 				//center O insertion
-				ax[curn]=(i+0.5f+0.25f)*h;
-				ay[curn]=(j+0.5f+0.25f)*h;
-				az[curn]=(k+0.5f+0.25f)*h;
-				AType[curn]=2;
-				curn++;
-				ax[curn]=(i+0.5f-0.25f)*h;
-				ay[curn]=(j+0.5f-0.25f)*h;
-				az[curn]=(k+0.5f+0.25f)*h;
-				AType[curn]=2;
-				curn++;
-				ax[curn]=(i+0.5f-0.25f)*h;
-				ay[curn]=(j+0.5f+0.25f)*h;
-				az[curn]=(k+0.5f-0.25f)*h;
-				AType[curn]=2;
-				curn++;
-				ax[curn]=(i+0.5f+0.25f)*h;
-				ay[curn]=(j+0.5f-0.25f)*h;
-				az[curn]=(k+0.5f-0.25f)*h;
-				AType[curn]=2;
-				curn;
+//				ax[curn]=(i+0.5f+0.25f)*h;
+//				ay[curn]=(j+0.5f+0.25f)*h;
+//				az[curn]=(k+0.5f+0.25f)*h;
+//				AType[curn]=2;
+//				curn++;
+//				ax[curn]=(i+0.5f-0.25f)*h;
+//				ay[curn]=(j+0.5f-0.25f)*h;
+//				az[curn]=(k+0.5f+0.25f)*h;
+//				AType[curn]=2;
+//				curn++;
+//				ax[curn]=(i+0.5f-0.25f)*h;
+//				ay[curn]=(j+0.5f+0.25f)*h;
+//				az[curn]=(k+0.5f-0.25f)*h;
+//				AType[curn]=2;
+//				curn++;
+//				ax[curn]=(i+0.5f+0.25f)*h;
+//				ay[curn]=(j+0.5f-0.25f)*h;
+//				az[curn]=(k+0.5f-0.25f)*h;
+//				AType[curn]=2;
+//				curn++;
 				}
 			}
 		}
 	}
 	printf("N  %d  ", curn);
 	N=curn;
-	for(int i=1;i<curn;i++){
+	for(int i=0;i<curn;i++){
 		TypeKol[AType[i]]++;
 	}
 	for(int i=1;i<4;i++){
@@ -481,7 +393,7 @@ void AtomPlace(float* x, float* y, float* z, int* T, int L,int &N){
 }
 
 void groout(const char* filename,float* x,float* y,float* z,float* vx,float* vy,float* vz, int* T, int N, float Hbox){
-	const char* naz[]={"Zero","Si","O","C"};
+	const char* naz[]={"Zero","Si","O","C2"};
 	FILE* fileout=fopen(filename,"w");
 	fprintf(fileout,"pure silica membrane\n");
 	fprintf(fileout," %d \n",N);
@@ -491,7 +403,7 @@ void groout(const char* filename,float* x,float* y,float* z,float* vx,float* vy,
 		fprintf(fileout,"%5d%-5s%5s%5d%8.3f%8.3f%8.3f%8.4f%8.4f%8.4f\n", i+1, "HybSi",naz[T[i]],i+1,x[i]/10.0f,y[i]/10.0f,z[i]/10.0f,vx[i]/10.0f,vy[i]/10.0f,vz[i]/10.0f);
 		//fprintf(fileout)
 	}
-	fprintf(fileout,"%f   %f   %f \n", Hbox,Hbox,Hbox);
+	fprintf(fileout,"%f   %f   %f \n", Hbox/10.0,Hbox/10.0,Hbox/10.0);
 	fclose(fileout);
 }
 
@@ -849,7 +761,6 @@ void CalcRDF(float* x, float* y, float* z,int* type,float* rdf, int rdfcount, in
 				//printf("hist %d  lin  %d type[i] %d type[j] %d rdf %f \n", hist, lin,type[i],type[j], rdf[lin]);
 				rdf[lin]+=2.0f;
 			}
-			
 		}
 	}
 	//system("sleep 2");
@@ -893,22 +804,542 @@ void ResetAtoms(int* type, int N,int toset){
 	float frand;
 	tempn=N;
 	set=0;
-	printf("reset start N %d set %d toset %d\n", N, set, toset);
+	//printf("reset start N %d set %d toset %d\n", N, set, toset);
 	while(set<toset){
 		frand=ran2(&rseed);
 		
 		RandAtom=floor(frand*N);
-		printf("RandAtom %d %f \n", RandAtom,frand);
+		//printf("RandAtom %d %f \n", RandAtom,frand);
 		if(type[RandAtom]==2){
 			type[RandAtom]=3;	//chenge O to C
 			type[tempn]=3;	//add new C
 			ax[tempn]=ax[RandAtom];	//set initial coordinates
 			ay[tempn]=ay[RandAtom];
 			az[tempn]=az[RandAtom]+0.8;
-			printf("ResetAtom %d, tempn %d, set %d \n", RandAtom, tempn, set);
+			//printf("ResetAtom %d, tempn %d, set %d \n", RandAtom, tempn, set);
 			tempn+=1;
 			set+=1;
 		}
 	}
 	Natom=tempn;
+}
+
+void GetBonds(int N,float L,float br){
+	int i;
+	int j;
+	float tx;
+	float ty;
+	float tz;
+	float rz;
+	int tempi;
+	int lin;
+	for(i=0;i<MAXNEAR*MAXATOM+MAXATOM;i++){
+		bond[i]=0;
+	}
+	
+	for(i=0;i<N;i++){
+		tempi=0;
+		for(j=0;j<N;j++){
+			if(i!=j){
+				tx=rast(ax[i],ax[j],L);
+				ty=rast(ay[i],ay[j],L);
+				tz=rast(az[i],az[j],L);
+				rz=sqrt(tx*tx+ty*ty+tz*tz);
+				if (rz<br){
+					//printf("i %d j %d, rz %f br %f tempi %d\n", i,j,rz,br,tempi);
+					//printf("ti %d tj %d \n", AType[i],AType[j]);
+					lin=i*MAXNEAR+tempi+MAXATOM;
+					bond[lin]=j;
+					bond[i]+=1;
+					tempi+=1;
+				}
+			}
+		}
+		//system("sleep 2");
+		//printf("atom %d have %d bonds\n", i, bond[i]);
+	}
+	//system("sleep 10");
+	printf("Geting Bonds DONE\n");
+}
+void GetAngles(int N){
+	int i;
+	int j;
+	int k;
+	int lin;
+	int lin1;
+	int lin2;
+	int tempi;
+	for(i=0;i<N;i++){
+		angle1[i]=0;
+		angle2[i]=0;
+	}
+	
+	for(i=0;i<N;i++){
+		tempi=0;
+		for(j=0;j<bond[i];j++){
+			for(k=j+1;k<bond[i];k++){
+				lin=i*MAXNEAR+tempi+MAXATOM;
+				lin1=i*MAXNEAR+j+MAXATOM;
+				lin2=i*MAXNEAR+k+MAXATOM;
+				angle1[i]++;
+				angle2[i]++;
+				angle1[lin]=bond[lin1];
+				angle2[lin]=bond[lin2];
+				//printf("      i %d tempi %d angle1 %d angle2 %d \n",i, tempi,angle1[lin],angle2[lin]);
+				tempi++;
+			}
+		}
+		printf("i %d angle1 %d angle2 %d \n",i,angle1[i],angle2[i]);
+	}
+	//system("sleep 1");
+	printf("GEting Angles DONE \n");
+}
+
+void GetDih(int N){
+	int i;
+	int j;
+	int k;
+	int l;
+	int lin;
+	int tempi;
+	
+	int lin1;
+	int lin2;
+	int lin3;
+	for(i=0;i<N;i++){
+		tors1[i]=0;
+		tors2[i]=0;
+		tors3[i]=0;
+	}
+	
+	for(i=0;i<N;i++){
+		//printf("atom number # %d bonds %d \n",i,bond[i]);
+		tempi=0;
+		for(j=0;j<bond[i];j++){	//bond number
+			lin1=i*MAXNEAR+j+MAXATOM;	//bond massive number | bond[lin1]  -atom number
+			//printf("---Bonded atom 1 %d \n", bond[lin1]);
+			if(bond[lin1]!=i){
+				for(k=0;k<bond[bond[lin1]];k++){
+					lin2=bond[lin1]*MAXNEAR+k+MAXATOM;
+					//printf("--- ---Bonded atom 2 %d \n", bond[lin2]);
+					if(bond[lin2]!=i){
+						for(l=0;l<bond[bond[lin2]];l++){
+							lin3=bond[lin2]*MAXNEAR+l+MAXATOM;
+							//printf("--- --- ---Bonded atom 3 %d \n", bond[lin3]);
+							if((bond[lin3]!=bond[lin1])||(bond[lin3]!=i)){
+								tors1[i]++;
+								tors2[i]++;
+								tors3[i]++;
+								lin=i*MAXNEAR+tempi+MAXATOM;
+								tors1[lin]=bond[lin1];
+								tors2[lin]=bond[lin2];
+								tors3[lin]=bond[lin3];
+								//printf("ni %d a1 %d a2 %d a3 %d at1 %d at2 %d at3 %d\n", tempi,tors1[lin],tors2[lin],tors3[lin1],AType[tors1[lin]],AType[tors2[lin]],AType[tors3[lin]]);
+								tempi++;
+							}
+						}
+					}
+				}
+			}
+		}
+		//system("sleep 20");
+	}
+	printf("Getting Dihedral angles DONE \n");
+}
+
+void PotToZero(int N){
+	int i;
+	for(i=0;i<N;i++){
+		fx[i]=0.0;
+		fy[i]=0.0;
+		fz[i]=0.0;
+	}
+}
+
+void PotBond(int N,float L){
+	int i;
+	int j;
+	int k;
+	int lin;
+	float tx;
+	float ty;
+	float tz;
+	float rz;
+	float force;
+	for(i=0;i<N;i++){
+		for(j=0;j<bond[i];j++){
+			lin=MAXNEAR*i+j+MAXATOM;
+			//printf("i %d bond[lin] %d lin %d",i,bond[lin],lin);
+			tx=rast(ax[i],ax[bond[lin]],L);	//minimal obraz
+			ty=rast(ay[i],ay[bond[lin]],L);
+			tz=rast(az[i],az[bond[lin]],L);
+			rz=sqrt(tx*tx+ty*ty+tz*tz);
+			//remap
+			//printf("ATYpe %d \n", AType[bond[lin]]);
+			lin=AType[i]*MAXATOMTYPE+AType[bond[lin]];
+			
+			force=2.0f*PBond2[lin]*(rz-PBond1[lin])+3.0f*PBond3[lin]*(rz-PBond1[lin])*(rz-PBond1[lin])+4.0f*PBond4[lin]*(rz-PBond1[lin])*(rz-PBond1[lin])*(rz-PBond1[lin]);
+//			printf("ti %d tj %d b0 %f k2 %f k3 %f k4 %f \n", AType[i],AType[bond[MAXNEAR*i+j+MAXATOM]], PBond1[lin], PBond2[lin],PBond3[lin],PBond4[lin]);
+//			printf("force %f rz %f b0 \n",force,rz);
+//			system("sleep 1");
+			fx[i]+=force*tx/rz;
+			fy[i]+=force*ty/rz;
+			fz[i]+=force*tz/rz;
+			//printf("i %d force %f\n", i,force);
+		}
+	}
+	//system("sleep 10");
+}
+
+void PotVDW(int N,float L){
+	int i;
+	int j;
+	int lin;
+	float tx;
+	float ty;
+	float tz;
+	float rz;
+	float rz2;
+	float rz7;
+	float rz10;
+	float force;
+	for(i=0;i<N;i++){
+		for(j=0;j<N;j++){
+			if(i!=j){
+				tx=rast(ax[i],ax[j],L);	//minimal obraz
+				ty=rast(ay[i],ay[j],L);
+				tz=rast(az[i],az[j],L);
+				rz=sqrt(tx*tx+ty*ty+tz*tz);
+				if(rz<L/2.0f){
+					lin=AType[i]*MAXATOMTYPE+AType[j];
+					rz2=rz*rz;
+					rz7=rz2*rz2*rz2*rz;
+					rz10=rz7*rz2*rz;
+					force+=9.0f*VDWA[lin]/rz10-6.0f*VDWB[lin]/rz7;	//Lennara-Jones
+					force+=CuQ[AType[i]]*CuQ[AType[j]]/rz2;	//Coloumb
+					//
+					fx[i]+=force*tx/rz;
+					fy[i]+=force*ty/rz;
+					fz[i]+=force*tz/rz;
+				}
+			}
+		}
+	}
+}
+
+void SummForce(int N, float L){
+	printf("start summ\n");
+	PotToZero(N);
+	printf("set force t zero DONE \n");
+	PotBond(N,L);
+	printf("bond force calculating DONE\n");
+	//PotVDW(N,L);
+	//printf("Lennard-JOnes calculating DONE\n");
+	//PotAngle(N,L);
+	//printf("Angle calculating DONE\n");
+}
+
+void PotAngle(int N, int L){
+	int i;
+	int j;
+	int k;
+	int lin1;
+	int lin2;
+	float tx1;
+	float tx2;
+	float tx3;
+	float ty1;
+	float ty2;
+	float ty3;
+	float tz1;
+	float tz2;
+	float tz3;
+	float rz1;
+	float rz2;
+	float rz3;
+	float cosfi;
+	float sinfi;
+	float force;
+	int lin3;
+	float fi;
+	for(i=0;i<N;i++){
+		//printf("----------------------------------------------\ni %d angle1 %d angle2 %d\n",i,angle1[i],angle2[i]);
+		for(j=0;j<angle1[i];j++){
+			lin1=i*MAXNEAR+j+MAXATOM;
+			//printf("i %d angle1[lin1] %d\n", j, angle1[lin1]);
+			tx1=rast(ax[i],ax[angle1[lin1]],L);	//vector i-j
+			ty1=rast(ay[i],ay[angle1[lin1]],L);
+			tz1=rast(az[i],az[angle1[lin1]],L);
+			rz1=sqrt(tx1*tx1+ty1*ty1+tz1*tz1);
+			//printf("tx %f ty %f tz %f rz %f\n",tx1,ty1,tz1,rz1);
+			//system("sleep 10");
+			for(k=0;k<angle2[i];k++){
+				lin2=i*MAXNEAR+k+MAXATOM;
+				//printf("k %d lin2 %d \n",k,lin2);
+				tx2=rast(ax[i],ax[angle2[lin2]],L);	//vector i-k
+				ty2=rast(ay[i],ay[angle2[lin2]],L);
+				tz2=rast(az[i],az[angle2[lin2]],L);
+				rz2=sqrt(tx2*tx2+ty2*ty2+tz2*tz2);
+				//tx3=rast(ax[j],ax[k],L);
+				//ty3=rast(ax[])
+				//printf("rz1 %f rz2 %f \n", rz1,rz2);
+				cosfi=(tx1*tx2+ty1*ty2+tz1*tz2)/rz1/rz2;
+				if(cosfi>0.999){
+					cosfi=0.999;
+				}
+				else if(cosfi<-0.999){
+					cosfi=-0.999;
+				}
+				sinfi=sqrt(1.0f-cosfi*cosfi);
+				fi=acos(cosfi); //*180.0/PI;
+			//printf("type i %d type j %d type k %d \n", AType[i],AType[angle1[lin1]],AType[angle2[lin2]]);
+			printf("cosfi %f sinfi %f fi %f\n",cosfi,sinfi,fi);
+				// radianes
+				lin3=AType[i]*MAXATOMTYPE*MAXATOMTYPE+MAXATOMTYPE*AType[angle1[lin1]]+AType[angle2[lin2]];
+			printf("phi %f  h2  %f  h3  %f  h4  %f ",PAngle1[lin3],PAngle2[lin3],PAngle3[lin3],PAngle4[lin3]);
+				//f i
+				//part 1 by ij
+				force=-(PAngle2[lin3]*(fi-fi0[lin3])+PAngle3[lin3]*(fi-fi0[lin3])*(fi-fi0[lin3])+PAngle4[lin3]*(fi-fi0[lin3])*(fi-fi0[lin3])*(fi-fi0[lin3]))*(cosfi/sinfi/rz1);
+				fx[j]+=force*tx1/rz1;
+				fy[j]+=force*ty1/rz1;
+				fz[j]+=force*tz1/rz1;
+				
+				fx[i]-=force*tx1/rz1;	//for i
+				fy[i]-=force*ty1/rz1;
+				fz[i]-=force*tz1/rz1;
+			printf("force 11 %f ",force);
+				//part 2 by kj
+				force=-(PAngle2[lin3]*(fi-fi0[lin3])+PAngle3[lin3]*(fi-fi0[lin3])*(fi-fi0[lin3])+PAngle4[lin3]*(fi-fi0[lin3])*(fi-fi0[lin3])*(fi-fi0[lin3]))*(-1.0f/sinfi/rz1);
+				fx[j]+=force*tx2/rz2;
+				fy[j]+=force*ty2/rz2;
+				fz[j]+=force*tz2/rz2;
+				
+				fx[i]-=force*tx2/rz2;
+				fy[i]-=force*ty2/rz2;
+				fz[i]-=force*tz2/rz2;
+			printf("force 12 %f ",force);
+				//f k
+				//part 1 by ij
+				force=-(PAngle2[lin3]*(fi-fi0[lin3])+PAngle3[lin3]*(fi-fi0[lin3])+PAngle4[lin3]*(fi-fi0[lin3])*(fi-fi0[lin3])*(fi-fi0[lin3])*(fi-fi0[lin3]))*(cosfi/sinfi/rz2);
+				fx[k]+=force*tx1/rz1;
+				fy[k]+=force*ty1/rz1;
+				fz[k]+=force*tz1/rz1;
+				
+				fx[i]-=force*tx1/rz1;	//for i
+				fy[i]-=force*ty1/rz1;
+				fz[i]-=force*tz1/rz1;
+			printf("force 21 %f ",force);
+				//part 2 by kj
+				force=-(PAngle2[lin3]*(fi-fi0[lin3])+PAngle3[lin3]*(fi-fi0[lin3])+PAngle4[lin3]*(fi-fi0[lin3])*(fi-fi0[lin3])*(fi-fi0[lin3])*(fi-fi0[lin3]))*(-1.0f/sinfi/rz2);
+				fx[k]+=force*tx2/rz2;
+				fy[k]+=force*ty2/rz2;
+				fz[k]+=force*tz2/rz2;
+				
+				fx[i]-=force*tx2/rz2;
+				fy[i]-=force*ty2/rz2;
+				fz[i]-=force*tz2/rz2;
+			printf("force 22 %f \n \n",force);
+			if(AType[i]==2){
+				system("sleep 3");
+			}
+			}
+		}
+	}
+}
+
+void MixingParameters(){
+	int i;
+	int j;
+	int k;
+	int lin1;
+	int lin2;
+	int lin3;
+	//
+	i=1;	//bond SI-O
+	j=2;
+	lin1=MAXATOMTYPE*i+j;
+	lin2=MAXATOMTYPE*j+i;
+	PBond1[lin1]=1.666;	// b0
+	PBond2[lin2]=PBond1[lin1];
+	PBond2[lin1]=106226.0f;	//k2
+	PBond2[lin2]=PBond2[lin1];
+	PBond3[lin1]=-307920.0f;
+	PBond3[lin2]=PBond3[lin2];
+	PBond4[lin1]=474813.0f;
+	PBond4[lin2]=PBond4[lin1];
+	
+	i=1;	//Angle O-Si-O
+	j=2;
+	k=2;
+	lin1=i*MAXATOMTYPE*MAXATOMTYPE+MAXATOMTYPE*j+k;
+	lin2=i*MAXATOMTYPE*MAXATOMTYPE+MAXATOMTYPE*k+j;
+	PAngle1[lin1]=110.612f/180.0f*PI;
+	PAngle1[lin2]=PAngle1[lin1];
+	PAngle2[lin1]=8876.0f;
+	PAngle2[lin2]=PAngle2[lin1];
+	PAngle3[lin1]=-3951.0f;
+	PAngle3[lin2]=PAngle3[lin1];
+	PAngle4[lin1]=1358.0f;
+	PAngle4[lin2]=PAngle4[lin1];
+	
+	i=2;	//Angle Si-O-Si
+	j=1;
+	k=1;
+	lin1=i*MAXATOMTYPE*MAXATOMTYPE+MAXATOMTYPE*j+k;
+	lin2=i*MAXATOMTYPE*MAXATOMTYPE+MAXATOMTYPE*k+j;
+	PAngle1[lin1]=176.265f/180.0f*PI;
+	PAngle1[lin2]=PAngle1[lin1];
+	PAngle2[lin1]=18358.0f;
+	PAngle2[lin2]=PAngle2[lin1];
+	PAngle3[lin1]=37054.0f;
+	PAngle3[lin2]=PAngle3[lin1];
+	PAngle4[lin1]=41783.0f;
+	PAngle4[lin2]=PAngle4[lin1];
+}
+
+void itpout(int N, const char* filename){
+	const char* naz[]={"Zero","Si","O","C2"};
+	const char* anaz[]={"Zero","Si","O","C2"};
+	int i;
+	int j;
+	int k;
+	int lin1;
+	int lin2;
+	int tempi;
+	FILE* fileitp=fopen(filename,"w");
+		fprintf(fileitp,"[ defaults ]\n");
+		fprintf(fileitp,"1  3  yes  0.0  0.0\n\n");
+		fprintf(fileitp,"[ atomtypes ]\n");
+		fprintf(fileitp,"Si     28.0000    0.0000 A     0.3000000000E+00    0.00000000E-00\n");
+		fprintf(fileitp,"O     16.0000    0.0000 A     0.3000000000E+00    0.00000000E-00\n");
+		fprintf(fileitp,"C2     14.0000    0.0000 A     0.3000000000E+00    0.00000000E-00\n\n");
+		fprintf(fileitp,"[ bondtypes ]\n");
+		fprintf(fileitp,"  Si   O     1    0.1666  120000.0\n");
+		fprintf(fileitp,"  Si   C2    1    0.1899  106000.0\n");
+		fprintf(fileitp,"  C2   C2    1    0.1899   40580.0\n\n");
+		fprintf(fileitp,"[ angletypes ]\n");
+//		fprintf(fileitp," O  Si  O  6 110.612  0.0  0.0   88.76  -39.53    13.58  \n");
+//		fprintf(fileitp," Si  O  Si  6 176.265  0.0  0.0  183.58  370.54   417.83  \n");
+//		fprintf(fileitp," C2  Si  C2  6 113.19  0.0  0.0  151.72  -85.43   83.88  \n");
+//		fprintf(fileitp," O  Si  C2 6 110.612  0.0  0.0   88.76  -39.53    13.58  \n");
+//		fprintf(fileitp," Si  C2  C2  6 112.67  0.0  0.0  165.58  -31.17   0.0  \n\n");
+		fprintf(fileitp," O  Si  O  1 110.612  472.0  \n");
+		fprintf(fileitp," O  Si  C2  1 110.612  472.0  \n");
+		fprintf(fileitp," Si  O  Si  1 176.265  8794.0  \n");
+		fprintf(fileitp," C2  Si  C2  1 113.19  2216.0  \n");
+		fprintf(fileitp," Si  C2  C2  1 112.67  297.0  \n\n");
+		fprintf(fileitp,"[ dihedraltypes ]\n");		
+		fprintf(fileitp," Si  C2  C2  Si  3  0.1676  -1.7598   0.419   2.3464   0.0  0.0  \n\n");
+		//[ moleculetype ]
+		fprintf(fileitp,"[ moleculetype ]\n");
+		fprintf(fileitp,"MEM   6 \n\n");
+		//[ atoms ]
+		fprintf(fileitp,"[ atoms ]\n");
+		tempi=1;
+		for(i=0;i<N;i++){
+			fprintf(fileitp," %d %s %d  %s  %s  %d  %f  %f \n ",i+1,naz[AType[i]],1,"MEM",anaz[AType[i]],tempi,0.0, mass[i]);
+			tempi++;
+			if(tempi>20){
+				tempi=1;
+			}
+		}
+		fprintf(fileitp,"[ bonds ]\n");
+		for(i=0;i<N;i++){
+		//printf(" i %d bond [i] %d \n", i, bond[i]);
+			for(j=0;j<bond[i];j++){
+				lin1=i*MAXNEAR+j+MAXATOM;
+				if(bond[lin1]>i){
+					//printf(" lin1 %d bond[lin1] %d\n", lin1,bond[lin1]);
+					fprintf(fileitp,"%d     %d    %d \n",i+1,bond[lin1]+1,1);
+				}
+			}
+		}
+		fprintf(fileitp,"[ angles ]\n");
+		for(i=0;i<N;i++){
+			printf("i %d angle[i] %d\n",i,angle1[i]);
+			for(j=0;j<angle1[i];j++){
+				lin1=i*MAXNEAR+j+MAXATOM;
+				//if(angle2[lin1]>angle1[lin1]){
+					fprintf(fileitp," %d   %d   %d   %d  \n",angle1[lin1]+1,i+1,angle2[lin1]+1,1);
+				//}
+			}
+		}
+		fprintf(fileitp,"[ dihedrals ]\n");
+		for(i=0;i<N;i++){
+			//printf("i %d tors[i] %d\n", i, tors1[i]);
+			if(AType[i]==1){
+				for(j=0;j<tors1[i];j++){
+					lin1=i*MAXNEAR+j+MAXATOM;
+					if(AType[tors1[lin1]]==3){
+						if(AType[tors2[lin1]]==3){
+							if(AType[tors3[lin1]]==1){
+								fprintf(fileitp,"  %d   %d   %d   %d   %d \n",i+1,tors1[lin1]+1,tors2[lin1]+1,tors3[lin1]+1,3);
+							}
+						}
+					}
+				}
+			}
+		}
+		fprintf(fileitp,"[ exclusions ]\n");
+		fprintf(fileitp,"[ position_restraints ]\n");
+		fprintf(fileitp,"[ constraints ]\n\n");
+		fprintf(fileitp,"[ system ]\n");
+		fprintf(fileitp,"generated \n");
+		fprintf(fileitp,"[ molecules ] \n");
+		fprintf(fileitp,"  %s  %d \n", "MEM", 1);
+		
+//			[ dihedrals ]
+//			[ exclusions ]
+//			[ position_restraints ]
+//			[ constraints ]
+//			[ system ]
+//			generateg with membcreat v5
+//			[ molecules ]
+//       B     328
+		
+		
+	fclose(fileitp);
+}
+
+void Replace(int N, float proc){
+	int torep;
+	int done;
+	int random;
+	int lin1;
+	int cura;
+	int i;
+	int j;
+	int k;
+	int first;
+	int second;
+	torep=proc/100.0f*(TypeKol[2]+1);
+	//printf("Replacing %d O atoms\n", torep);
+	done=0;
+	cura=Natom;
+	while(done<torep){
+		random=floor(ran2(&rseed)*Natom);
+		if(AType[random]==2){
+			//заменяем атом текущий
+			AType[random]=3;
+			second=bond[random*MAXNEAR+1+MAXATOM];	//запоминаем номер второго атома
+			bond[random*MAXNEAR+1+MAXATOM]=cura;	//заменяем второй атом
+			ax[cura]=ax[random]+0.1f;	//new coords
+			ay[cura]=ay[random];
+			az[cura]=az[random];
+			bond[cura]=2;
+			bond[cura*MAXNEAR+0+MAXATOM]=random;
+			bond[cura*MAXNEAR+1+MAXATOM]=second;
+			AType[cura]=3;
+			//заменяем связь на втором атоме
+			for(i=0;i<bond[second];i++){
+				lin1=second*MAXNEAR+i+MAXATOM;
+				if(bond[lin1]==random){
+					bond[lin1]=cura;
+				}
+			}
+			cura++;
+			done++;
+		}
+	}
+	Natom=cura;
 }
